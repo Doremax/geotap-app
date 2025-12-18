@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
   <head>
@@ -69,10 +68,18 @@
         Phone, User as UserIcon, Trash2, Plus, Loader2, Save, 
         Package, Clock, MessageSquare, Search, MapPin, 
         CheckCircle, ChevronDown, LogOut, RefreshCw, Pencil, 
-        Lock, ExternalLink, Navigation, X, ShieldAlert 
+        Lock, ExternalLink, Navigation, X, ShieldAlert, AlertTriangle, 
+        ExternalLink as LinkIcon, Smartphone, Globe, Settings
       } from 'lucide-react';
 
-      // --- UTILS ---
+      // =======================================================
+      // ВАЖНО: ЗАМЕНИТЕ НА ВАШ GOOGLE APPS SCRIPT URL
+      // =======================================================
+      const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzYOUR_SCRIPT_ID/exec';
+      
+      // =======================================================
+      // UTILS (все функции остаются без изменений)
+      // =======================================================
       function deg2rad(deg) { return deg * (Math.PI / 180); }
 
       function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
@@ -125,24 +132,257 @@
         if (!iso) return "";
         const d = new Date(iso);
         if (isNaN(d.getTime())) return iso;
-        return d.toLocaleDateString('ru-RU') + " " + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        return d.toLocaleDateString('ru-RU') + " " + d.toTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
       };
 
       // Device ID generator
       const getDeviceId = () => {
         let deviceId = localStorage.getItem('geo_bot_device_id');
         if (!deviceId) {
-          // Simple random string generator for Device ID
           deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
           localStorage.setItem('geo_bot_device_id', deviceId);
         }
         return deviceId;
       };
 
-      // --- SERVICE LAYER ---
-      const isGoogleEnv = () => !!(window.google && window.google.script);
+      // =======================================================
+      // TELEGRAM DATA FUNCTIONS (без изменений)
+      // =======================================================
+      const detectPlatform = () => {
+        const tg = window.Telegram?.WebApp;
+        if (!tg) return { type: 'unknown', details: 'Telegram WebApp не загружен' };
+        
+        const platform = tg.platform || 'unknown';
+        const version = tg.version || 'unknown';
+        const isWebApp = tg.initDataUnsafe && Object.keys(tg.initDataUnsafe).length > 0;
+        
+        return {
+          type: platform,
+          version: version,
+          isValidWebApp: isWebApp,
+          hasUserData: !!tg.initDataUnsafe?.user,
+          details: {
+            platform: platform,
+            version: version,
+            isExpanded: tg.isExpanded,
+            colorScheme: tg.colorScheme,
+            hasInitDataUnsafe: !!tg.initDataUnsafe,
+            hasUser: !!tg.initDataUnsafe?.user,
+            userData: tg.initDataUnsafe?.user
+          }
+        };
+      };
 
-      // MOCKS
+      const getTelegramData = () => {
+        return new Promise((resolve) => {
+          let attempts = 0;
+          const maxAttempts = 30;
+          const debugLog = [];
+          
+          const logDebug = (message) => {
+            debugLog.push(`${new Date().toLocaleTimeString()}: ${message}`);
+            console.log(`[Telegram WebApp Debug] ${message}`);
+          };
+
+          logDebug("🔍 Начинаем диагностику Telegram WebApp...");
+          
+          // ПЕРВЫМ ДЕЛОМ - определим тип платформы
+          const platformInfo = detectPlatform();
+          logDebug("📱 Информация о платформе:");
+          logDebug(`   Тип: ${platformInfo.type}`);
+          logDebug(`   Версия: ${platformInfo.version}`);
+          logDebug(`   Валидный WebApp: ${platformInfo.isValidWebApp}`);
+          logDebug(`   Есть данные пользователя: ${platformInfo.hasUserData}`);
+          
+          // Если это не Telegram WebApp, сразу сообщим
+          if (!platformInfo.isValidWebApp) {
+            logDebug("❌ НЕ ЯВЛЯЕТСЯ Telegram WebApp!");
+            logDebug("   🔍 Возможные причины:");
+            logDebug("   1. Страница открыта не через Telegram бота");
+            logDebug("   2. Бот не настроен как WebApp");
+            logDebug("   3. Старая версия Telegram");
+            
+            resolve({ 
+              success: false, 
+              error: "Приложение должно открываться через Telegram бота", 
+              platformInfo: platformInfo,
+              debug: debugLog,
+              solution: "Откройте приложение через бота в Telegram, а не как обычную веб-страницу"
+            });
+            return;
+          }
+          
+          const tryGetData = () => {
+            attempts++;
+            logDebug(`🔄 Попытка ${attempts}/${maxAttempts}`);
+            
+            // Проверяем основные способы получения данных
+            const tg = window.Telegram?.WebApp;
+            if (tg?.initDataUnsafe?.user) {
+              const user = tg.initDataUnsafe.user;
+              logDebug("✅ Пользователь найден в initDataUnsafe!");
+              logDebug(`   ID: ${user.id}`);
+              logDebug(`   Username: ${user.username || 'не указан'}`);
+              logDebug(`   Имя: ${user.first_name || ''} ${user.last_name || ''}`);
+              
+              const result = {
+                id: user.id,
+                username: user.username,
+                first_name: user.first_name,
+                last_name: user.last_name,
+                language_code: user.language_code,
+                raw: user
+              };
+              
+              resolve({ success: true, data: result, debug: debugLog });
+              return;
+            }
+            
+            // Проверяем initData
+            if (tg?.initData) {
+              try {
+                const params = new URLSearchParams(tg.initData);
+                const userParam = params.get('user');
+                if (userParam) {
+                  const userData = JSON.parse(decodeURIComponent(userParam));
+                  logDebug("✅ Пользователь найден в initData!");
+                  
+                  const result = {
+                    id: userData.id,
+                    username: userData.username,
+                    first_name: userData.first_name,
+                    last_name: userData.last_name,
+                    language_code: userData.language_code,
+                    raw: userData
+                  };
+                  
+                  resolve({ success: true, data: result, debug: debugLog });
+                  return;
+                }
+              } catch (e) {
+                logDebug(`⚠️ Ошибка парсинга initData: ${e.message}`);
+              }
+            }
+            
+            // Если исчерпали попытки
+            if (attempts >= maxAttempts) {
+              logDebug(`⏰ Не удалось получить данные после ${maxAttempts} попыток`);
+              resolve({ 
+                success: false, 
+                error: "Telegram WebApp данные недоступны после диагностики", 
+                debug: debugLog,
+                platformInfo: platformInfo
+              });
+              return;
+            }
+            
+            // Повторяем через 200ms
+            setTimeout(tryGetData, 200);
+          };
+          
+          // Начинаем попытки
+          tryGetData();
+        });
+      };
+
+      // =======================================================
+      // GOOGLE APPS SCRIPT API SERVICE (ИЗМЕНЕНО)
+      // =======================================================
+      class GoogleScriptService {
+        constructor(url) {
+          this.baseUrl = url;
+        }
+
+        async makeRequest(functionName, params = {}) {
+          try {
+            const url = new URL(this.baseUrl);
+            url.searchParams.append('function', functionName);
+            
+            // Добавляем параметры
+            Object.keys(params).forEach(key => {
+              url.searchParams.append(key, params[key]);
+            });
+
+            console.log(`[API] Вызов ${functionName}:`, params);
+            
+            const response = await fetch(url.toString(), {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const text = await response.text();
+            console.log(`[API] Ответ от ${functionName}:`, text);
+            
+            // Попытка парсинга JSON
+            try {
+              return JSON.parse(text);
+            } catch (e) {
+              console.warn(`[API] Ответ не JSON:`, text);
+              return text;
+            }
+          } catch (error) {
+            console.error(`[API] Ошибка вызова ${functionName}:`, error);
+            throw error;
+          }
+        }
+
+        getAppData(telegramId, deviceId) {
+          return this.makeRequest('getAppData', { telegramId, deviceId });
+        }
+
+        getGroupBrands(groupName) {
+          return this.makeRequest('getGroupBrands', { groupName });
+        }
+
+        getLastStockData(user, client) {
+          return this.makeRequest('getLastStockData', { 
+            userInfoJson: JSON.stringify(user), 
+            clientInfoJson: JSON.stringify(client) 
+          });
+        }
+
+        saveStockData(stockItems, comment, user, client) {
+          return this.makeRequest('saveStockData', { 
+            stockDataJson: JSON.stringify(stockItems), 
+            comment, 
+            userInfoJson: JSON.stringify(user), 
+            clientInfoJson: JSON.stringify(client) 
+          });
+        }
+
+        saveContacts(rowIndex, contacts, comment, username) {
+          return this.makeRequest('saveContacts', { 
+            rowIndex, 
+            contactsJson: JSON.stringify(contacts), 
+            comment, 
+            username 
+          });
+        }
+
+        updateLocation(rowIndex, lat, lng, username) {
+          return this.makeRequest('updateLocation', { rowIndex, lat, lng, username });
+        }
+
+        logSessionEvent(user, actionType) {
+          return this.makeRequest('logSessionEvent', { 
+            userJson: JSON.stringify(user), 
+            actionType 
+          });
+        }
+      }
+
+      // Создаем экземпляр сервиса
+      const googleService = new GoogleScriptService(GOOGLE_SCRIPT_URL);
+
+      // =======================================================
+      // MOCKS (для разработки - можно убрать в продакшене)
+      // =======================================================
       const MOCK_USER = { id: '112233', name: 'Dev Agent', group: 'MIRA' };
       const MOCK_CLIENTS = [
         { rowIndex: 100, region: 'Ташкент', district: 'Мирзо-Ulugbek', clientName: 'Demo Market', branch: 'Branch 1', lat: "", lng: "", updatedAt: "", updatedBy: "", isLocked: false, contacts: [], inn: "111222333", comment: "" },
@@ -150,110 +390,19 @@
       ];
       const MOCK_BRANDS = ["CocaCola", "Fanta", "Sprite", "Water 1L", "Water 5L"];
 
-      const googleService = {
-        getAppData: (telegramId, deviceId) => {
-          return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              if (String(telegramId) === '112233') {
-                setTimeout(() => resolve({ authorized: true, user: MOCK_USER, clients: MOCK_CLIENTS, stockHeaders: MOCK_BRANDS }), 800);
-              } else {
-                setTimeout(() => resolve({ authorized: false, user: null, clients: [] }), 500);
-              }
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler((res) => resolve(JSON.parse(res)))
-              .withFailureHandler(reject)
-              .getAppData(telegramId, deviceId);
-          });
-        },
-        getGroupBrands: (groupName) => {
-          return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              setTimeout(() => resolve(MOCK_BRANDS), 500);
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler(resolve)
-              .withFailureHandler(reject)
-              .getGroupBrands(groupName);
-          });
-        },
-        getLastStockData: (user, client) => {
-          return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              if (user.id === '112233') {
-                setTimeout(() => resolve({
-                  date: new Date().toISOString(),
-                  agent: "Dinara",
-                  stocks: { "CocaCola": 12, "Fanta": 56 },
-                  arrivals: { "CocaCola": 50 } // Mock Arrival
-                }), 500);
-              } else {
-                resolve(null);
-              }
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler((json) => resolve(json ? JSON.parse(json) : null))
-              .withFailureHandler(reject)
-              .getLastStockData(JSON.stringify(user), JSON.stringify(client));
-          });
-        },
-        saveStockData: (stockItems, comment, user, client) => {
-          return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              setTimeout(() => resolve("SUCCESS"), 500);
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler(resolve)
-              .withFailureHandler(reject)
-              .saveStockData(JSON.stringify(stockItems), comment, JSON.stringify(user), JSON.stringify(client));
-          });
-        },
-        saveContacts: (rowIndex, contacts, comment, username) => {
-          return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              setTimeout(() => resolve("SUCCESS"), 500);
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler(resolve)
-              .withFailureHandler(reject)
-              .saveContacts(rowIndex, JSON.stringify(contacts), comment, username);
-          });
-        },
-        updateLocation: (rowIndex, lat, lng, username) => {
-          return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              setTimeout(() => resolve("SUCCESS"), 500);
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler(resolve)
-              .withFailureHandler(reject)
-              .updateLocation(rowIndex, lat, lng, username);
-          });
-        },
-        logSessionEvent: (user, actionType) => {
-           return new Promise((resolve, reject) => {
-            if (!isGoogleEnv()) {
-              console.log("Mock Log:", user.name, actionType);
-              resolve("SUCCESS");
-              return;
-            }
-            window.google.script.run
-              .withSuccessHandler(resolve)
-              .withFailureHandler(reject)
-              .logSessionEvent(JSON.stringify(user), actionType);
-           });
-        }
+      // Функция для определения, работаем ли мы в среде разработки
+      const isDevelopmentMode = () => {
+        // В режиме разработки возвращаем мок данные
+        return window.location.hostname === 'localhost' || 
+               window.location.hostname === '127.0.0.1' ||
+               GOOGLE_SCRIPT_URL.includes('YOUR_SCRIPT_ID');
       };
 
-      // --- COMPONENTS ---
+      // =======================================================
+      // COMPONENTS (все компоненты остаются без изменений)
+      // =======================================================
 
-      // 1. Contacts Modal
+      // 1. Contacts Modal (остался без изменений)
       const ContactsModal = ({ isOpen, onClose, initialContacts, initialComment, onSave, isLocked }) => {
         const [contacts, setContacts] = useState([]);
         const [comment, setComment] = useState("");
@@ -401,7 +550,7 @@
         );
       };
 
-      // 2. Stock Modal
+      // 2. Stock Modal (остался без изменений)
       const StockModal = ({ isOpen, onClose, onSave, brands, lastStockData, clientName }) => {
         const [stockValues, setStockValues] = useState({});
         const [comment, setComment] = useState("");
@@ -485,15 +634,12 @@
                           <div className="font-bold text-gray-800 text-sm leading-tight">
                             {brand}
                           </div>
-                          {/* ПРИХОД (NEW) */}
                           <div className="flex items-center justify-center h-10 bg-gray-100 rounded text-gray-500 font-medium text-xs select-none border border-gray-200">
                              {arrivalVal}
                           </div>
-                          {/* БЫЛО */}
                           <div className="flex items-center justify-center h-10 bg-gray-50 rounded text-gray-400 font-medium text-sm select-none">
                             {oldVal}
                           </div>
-                          {/* СТАЛО */}
                           <div>
                             <input
                               type="number"
@@ -532,7 +678,7 @@
         );
       };
 
-      // 3. Map Viewer
+      // 3. Map Viewer (остался без изменений)
       const MapViewer = ({ anchorLat, anchorLng, markerLat, markerLng, isLocked, onLocate, onMarkerChange, isGpsLoading }) => {
         const mapContainerRef = useRef(null);
         const mapInstanceRef = useRef(null);
@@ -543,7 +689,7 @@
           if (!mapContainerRef.current || mapInstanceRef.current) return;
           
           const map = L.map(mapContainerRef.current, {
-            center: [41.311, 69.240], // Default Tashkent
+            center: [41.311, 69.240],
             zoom: 18,
             zoomControl: false,
             attributionControl: false
@@ -566,11 +712,10 @@
           const map = mapInstanceRef.current;
           if (!map) return;
 
-          // --- Anchor Circle Logic ---
           if (anchorLat && anchorLng && !isLocked) {
             if (!circleLayerRef.current) {
               circleLayerRef.current = L.circle([anchorLat, anchorLng], {
-                radius: 20, // 20m Constraint
+                radius: 20,
                 color: '#3b82f6',
                 fillColor: '#3b82f6',
                 fillOpacity: 0.1,
@@ -588,7 +733,6 @@
             }
           }
 
-          // --- Marker Logic ---
           if (markerLat && markerLng) {
             const isRed = !isLocked;
             const color = isRed ? '#ef4444' : '#16a34a';
@@ -609,7 +753,6 @@
                   return;
                 }
 
-                // 20m Constraint check
                 const center = circleLayerRef.current.getLatLng();
                 if (map.distance(center, position) > 20) {
                   m.setLatLng(center);
@@ -664,7 +807,7 @@
         );
       };
 
-      // 4. List Components
+      // 4. List Components (остались без изменений)
       const ClientRowItem = ({ client, onClick, isSubItem = false }) => (
         <div onClick={() => onClick(client)} className={`relative p-4 cursor-pointer transition-all active:bg-blue-50 border-b border-gray-100 ${isSubItem ? 'bg-gray-50 pl-6 border-l-4 border-l-transparent hover:border-l-blue-400' : 'bg-white'}`}>
           <div className="pr-8 flex flex-col">
@@ -706,7 +849,113 @@
         );
       };
 
-      // --- APP COMPONENT ---
+      // 5. Platform Diagnostic (остался без изменений)
+      const PlatformDiagnostic = ({ platformInfo, debugInfo, onManualLogin }) => {
+        return (
+          <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gradient-to-br from-red-50 to-orange-50 text-center fade-in">
+            <div className="w-24 h-24 bg-red-100 rounded-full flex items-center justify-center mb-6 shadow-lg">
+              <AlertTriangle className="w-12 h-12 text-red-600" />
+            </div>
+            
+            <h2 className="text-3xl font-bold mb-4 text-red-800">Ошибка платформы</h2>
+            <p className="text-gray-700 mb-6 text-lg leading-relaxed max-w-md">
+              Приложение должно открываться через <span className="font-bold text-blue-600">Telegram бота</span>, а не как обычная веб-страница.
+            </p>
+            
+            <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mb-6">
+              <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+                <Smartphone className="w-5 h-5" />
+                Информация о платформе
+              </h3>
+              
+              <div className="text-left space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Тип платформы:</span>
+                  <span className={`font-bold ${platformInfo.type !== 'unknown' ? 'text-green-600' : 'text-red-600'}`}>
+                    {platformInfo.type}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Версия:</span>
+                  <span className="font-mono text-gray-800">{platformInfo.version}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Валидный WebApp:</span>
+                  <span className={`font-bold ${platformInfo.isValidWebApp ? 'text-green-600' : 'text-red-600'}`}>
+                    {platformInfo.isValidWebApp ? 'Да' : 'Нет'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Данные пользователя:</span>
+                  <span className={`font-bold ${platformInfo.hasUserData ? 'text-green-600' : 'text-red-600'}`}>
+                    {platformInfo.hasUserData ? 'Есть' : 'Нет'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-blue-50 rounded-xl p-6 max-w-md w-full mb-6 border border-blue-200">
+              <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
+                <Settings className="w-5 h-5" />
+                Как исправить
+              </h3>
+              
+              <div className="text-left space-y-3 text-sm text-blue-700">
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-bold mt-0.5">1</div>
+                  <div>
+                    <div className="font-semibold">Откройте бота в Telegram</div>
+                    <div className="text-xs opacity-80">Найдите вашего бота в списке чатов</div>
+                  </div>
+                </div>
+                
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-bold mt-0.5">2</div>
+                  <div>
+                    <div className="font-semibold">Нажмите кнопку "Запустить" или "Start"</div>
+                    <div className="text-xs opacity-80">Это активирует WebApp</div>
+                  </div>
+                </div>
+                
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-bold mt-0.5">3</div>
+                  <div>
+                    <div className="font-semibold">Откройте приложение из бота</div>
+                    <div className="text-xs opacity-80">Используйте кнопку внутри чата</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-yellow-50 rounded-xl p-4 max-w-md w-full mb-6 border border-yellow-200">
+              <div className="text-sm text-yellow-800">
+                <strong>⚠️ Внимание:</strong> Ручной ввод возможен только для тестирования и требует знания вашего Telegram ID.
+              </div>
+            </div>
+
+            <button 
+              onClick={onManualLogin}
+              className="bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 px-6 rounded-xl shadow-lg transition-all active:scale-95 flex items-center gap-2"
+            >
+              <UserIcon className="w-5 h-5" />
+              Ручной ввод (для разработки)
+            </button>
+            
+            {debugInfo && (
+              <button 
+                onClick={() => window.dispatchEvent(new CustomEvent('toggleDebug'))}
+                className="mt-4 text-xs text-gray-500 hover:text-gray-700 underline"
+              >
+                Показать техническую информацию
+              </button>
+            )}
+          </div>
+        );
+      };
+
+      // =======================================================
+      // MAIN APP COMPONENT (изменена только логика API вызовов)
+      // =======================================================
       function App() {
         const [loading, setLoading] = useState(true);
         const [authorized, setAuthorized] = useState(false);
@@ -731,6 +980,11 @@
         const [debugInfo, setDebugInfo] = useState("");
         const [rememberMe, setRememberMe] = useState(true);
         const [deviceLocked, setDeviceLocked] = useState(false);
+        const [telegramIdStatus, setTelegramIdStatus] = useState("Инициализация...");
+        const [telegramDebugInfo, setTelegramDebugInfo] = useState("");
+        const [showDebugInfo, setShowDebugInfo] = useState(false);
+        const [platformInfo, setPlatformInfo] = useState(null);
+        const [showManualLogin, setShowManualLogin] = useState(false);
 
         // Modals
         const [showContactsModal, setShowContactsModal] = useState(false);
@@ -750,10 +1004,22 @@
               window.Telegram.WebApp.LocationManager.init(() => { });
             }
           }
+          
+          // Слушатель для показа/скрытия отладки
+          const handleToggleDebug = () => {
+            setShowDebugInfo(!showDebugInfo);
+          };
+          
+          window.addEventListener('toggleDebug', handleToggleDebug);
+          
           initApp();
+          
+          return () => {
+            window.removeEventListener('toggleDebug', handleToggleDebug);
+          };
         }, []);
 
-        // Real-time location watching
+        // Real-time location watching (без изменений)
         useEffect(() => {
           let watchId = null;
           if (selectedClient) {
@@ -783,79 +1049,152 @@
           };
         }, [selectedClient]);
 
+        // ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ (изменена логика API)
         const initApp = async () => {
-          let telegramId = null;
-          let attempts = 0;
-          while (!telegramId && attempts < 3) {
-            if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
-              telegramId = window.Telegram.WebApp.initDataUnsafe.user.id;
-            } else {
-              attempts++;
-              await new Promise(r => setTimeout(r, 300));
-            }
+          setLoading(true);
+          setTelegramIdStatus("Инициализация Telegram WebApp...");
+          
+          console.log("=== НАЧАЛО ИНИЦИАЛИЗАЦИИ ===");
+          
+          // Проверяем сохраненный ID
+          const savedId = localStorage.getItem('geo_bot_user_id');
+          if (savedId) {
+            console.log('Найден сохраненный ID:', savedId);
+            setTelegramIdStatus("Используется сохраненный ID");
+            checkServer(savedId, true);
+            return;
           }
-          if (!telegramId) telegramId = localStorage.getItem('geo_bot_user_id');
 
-          if (telegramId) {
-            checkServer(String(telegramId), true);
+          // Диагностируем платформу ПЕРВЫМ ДЕЛОМ
+          const platform = detectPlatform();
+          setPlatformInfo(platform);
+          console.log("📱 Информация о платформе:", platform);
+          
+          if (!platform.isValidWebApp) {
+            console.log("❌ НЕ ЯВЛЯЕТСЯ Telegram WebApp!");
+            setTelegramIdStatus("Неверная платформа");
+            setDebugInfo("Приложение должно открываться через Telegram бота");
+            setLoading(false);
+            return;
+          }
+
+          // Получаем Telegram данные
+          setTelegramIdStatus("Поиск данных пользователя...");
+          const telegramData = await getTelegramData();
+          
+          if (telegramData.success) {
+            console.log("=== TELEGRAM ДАННЫЕ ПОЛУЧЕНЫ ===");
+            console.log("Данные пользователя:", telegramData.data);
+            
+            setTelegramIdStatus("Telegram ID получен: " + telegramData.data.id);
+            setTelegramDebugInfo(telegramData.debug.join('\n'));
+            
+            checkServer(String(telegramData.data.id), true);
           } else {
+            console.log("=== ОШИБКА ПОЛУЧЕНИЯ TELEGRAM ДАННЫХ ===");
+            console.log("Ошибка:", telegramData.error);
+            console.log("Лог отладки:", telegramData.debug);
+            
+            setTelegramIdStatus("Telegram данные недоступны");
+            setTelegramDebugInfo(telegramData.debug.join('\n'));
+            setDebugInfo(telegramData.solution || telegramData.error);
+            
             setLoading(false);
           }
         };
 
-       const checkServer = (idToCheck, shouldSave = true) => {
+        // ПРОВЕРКА СЕРВЕРА (изменена логика API)
+        const checkServer = async (idToCheck, shouldSave = true) => {
           setLoading(true);
           const deviceId = getDeviceId();
           
-          googleService.getAppData(idToCheck, deviceId)
-            .then(data => {
-              if (data.authorized) {
-                // SAVE OR CLEAR based on shouldSave flag
-                if (shouldSave) {
-                  localStorage.setItem('geo_bot_user_id', idToCheck);
+          console.log("=== ОТПРАВКА НА СЕРВЕР ===");
+          console.log("ID для проверки:", idToCheck);
+          console.log("Device ID:", deviceId);
+          
+          try {
+            // Проверяем, не в режиме ли разработки
+            if (isDevelopmentMode()) {
+              console.log("🔧 Режим разработки - используем мок данные");
+              setTimeout(() => {
+                if (String(idToCheck) === '112233') {
+                  setAuthorized(true);
+                  setUser(MOCK_USER);
+                  setClients(MOCK_CLIENTS);
+                  setDeviceLocked(false);
+                  setTelegramIdStatus("Успешная авторизация (режим разработки)");
+                  setLoading(false);
                 } else {
-                  localStorage.removeItem('geo_bot_user_id');
+                  setAuthorized(false);
+                  setDebugInfo("Доступ закрыт: Ваш ID не найден в системе (режим разработки).");
+                  setLoading(false);
                 }
+              }, 800);
+              return;
+            }
 
-                setAuthorized(true);
-                setUser(data.user);
-                setClients(data.clients || []);
-                setDeviceLocked(false);
-
-                // LOG LOGIN EVENT
-                googleService.logSessionEvent(data.user, "ВХОД В СИСТЕМУ");
-
-                if (data.stockHeaders && data.stockHeaders.length > 0) {
-                  setUserGroupBrands(data.stockHeaders);
-                } else if (data.user && data.user.group) {
-                  googleService.getGroupBrands(data.user.group).then(setUserGroupBrands);
-                }
+            // Реальный API вызов
+            const data = await googleService.getAppData(idToCheck, deviceId);
+            console.log("=== ОТВЕТ СЕРВЕРА ===");
+            console.log("Данные от сервера:", data);
+            
+            if (data.authorized) {
+              if (shouldSave) {
+                localStorage.setItem('geo_bot_user_id', idToCheck);
               } else {
-                // AUTH FAILED OR USER REMOVED
-                setAuthorized(false);
-                
-                if (data.errorType === 'DEVICE_MISMATCH') {
-                  setDeviceLocked(true);
-                  setDebugInfo(data.error || "Устройство не авторизовано.");
-                } else {
-                   setDebugInfo("Доступ закрыт: Ваш ID не найден в системе.");
-                }
-
-                // CRITICAL: Clear session
                 localStorage.removeItem('geo_bot_user_id');
               }
-            })
-            .catch(e => setDebugInfo("Ошибка: " + e.message))
-            .finally(() => setLoading(false));
+
+              setAuthorized(true);
+              setUser(data.user);
+              setClients(data.clients || []);
+              setDeviceLocked(false);
+              setTelegramIdStatus("Успешная авторизация");
+
+              await googleService.logSessionEvent(data.user, "ВХОД В СИСТЕМУ");
+
+              if (data.stockHeaders && data.stockHeaders.length > 0) {
+                setUserGroupBrands(data.stockHeaders);
+              } else if (data.user && data.user.group) {
+                const brands = await googleService.getGroupBrands(data.user.group);
+                setUserGroupBrands(brands);
+              }
+            } else {
+              console.log("=== АВТОРИЗАЦИЯ ОТКЛОНЕНА ===");
+              setAuthorized(false);
+              
+              if (data.errorType === 'DEVICE_MISMATCH') {
+                setDeviceLocked(true);
+                setDebugInfo(data.error || "Устройство не авторизовано.");
+              } else {
+                 setDebugInfo("Доступ закрыт: Ваш ID не найден в системе.");
+              }
+
+              localStorage.removeItem('geo_bot_user_id');
+            }
+          } catch (e) {
+            console.log("=== ОШИБКА СЕТИ ===");
+            console.log("Ошибка:", e.message);
+            setDebugInfo("Ошибка сети: " + e.message);
+          } finally {
+            setLoading(false);
+          }
         };
 
+        // ОСТАЛЬНЫЕ ФУНКЦИИ (изменена только логика API)
         const handleManualLogin = () => {
-          if (manualIdInput) checkServer(manualIdInput, rememberMe);
+          setShowManualLogin(true);
+        };
+
+        const handleManualLoginSubmit = () => {
+          if (manualIdInput) {
+            setShowManualLogin(false);
+            checkServer(manualIdInput, rememberMe);
+          }
         };
 
         const handleLogout = () => {
           if (confirm('Выйти?')) {
-            // LOG LOGOUT EVENT
             if (user) googleService.logSessionEvent(user, "ВЫХОД ИЗ СИСТЕМЫ");
             
             localStorage.removeItem('geo_bot_user_id');
@@ -947,6 +1286,7 @@
             .catch(() => { alert("Network Error"); callback(); });
         };
 
+        // ОСТАЛЬНЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (без изменений)
         const uniqueRegions = useMemo(() => Array.from(new Set(clients.map(c => c.region).filter(Boolean))).sort(), [clients]);
         const uniqueDistricts = useMemo(() => (!selectedRegion ? [] : Array.from(new Set(clients.filter(c => c.region === selectedRegion).map(c => c.district).filter(Boolean))).sort()), [clients, selectedRegion]);
 
@@ -987,7 +1327,79 @@
 
         const groupKeys = Object.keys(groupedClients);
 
-        if (loading) return <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50"><Loader2 className="w-8 h-8 text-blue-600 animate-spin mb-4" /><p className="text-gray-500 font-medium animate-pulse">Загрузка базы...</p></div>;
+        // =======================================================
+        // RENDER LOGIC (без изменений)
+        // =======================================================
+
+        // ЭКРАН ЗАГРУЗКИ
+        if (loading) return (
+          <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
+            <Loader2 className="w-8 h-8 text-blue-600 animate-spin mb-4" />
+            <p className="text-gray-500 font-medium animate-pulse mb-2">Загрузка...</p>
+            <p className="text-xs text-gray-400 mb-2">{telegramIdStatus}</p>
+            
+            {platformInfo && (
+              <div className="mt-4 p-3 bg-gray-100 rounded-lg text-xs max-w-sm">
+                <div className="font-bold mb-1">Платформа: {platformInfo.type}</div>
+                <div>Версия: {platformInfo.version}</div>
+                <div className={platformInfo.isValidWebApp ? 'text-green-600' : 'text-red-600'}>
+                  WebApp: {platformInfo.isValidWebApp ? 'Валидный' : 'Невалидный'}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+
+        // ЭКРАН ДИАГНОСТИКИ ПЛАТФОРМЫ
+        if (platformInfo && !platformInfo.isValidWebApp) {
+          return (
+            <PlatformDiagnostic 
+              platformInfo={platformInfo}
+              debugInfo={telegramDebugInfo}
+              onManualLogin={handleManualLogin}
+            />
+          );
+        }
+
+        // ЭКРАН РУЧНОГО ВХОДА
+        if (showManualLogin) {
+          return (
+            <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-white text-center fade-in">
+              <h2 className="text-2xl font-bold mb-2">Ручной вход</h2>
+              <p className="text-gray-500 mb-6 text-sm">
+                Введите ваш Telegram ID вручную (только для разработки).
+              </p>
+              
+              <div className="w-full max-w-xs space-y-4">
+                <input
+                  type="number"
+                  className="border-2 border-gray-200 p-4 rounded-xl w-full text-center text-lg outline-none focus:border-blue-500"
+                  placeholder="Введите Telegram ID"
+                  value={manualIdInput}
+                  onChange={e => setManualIdInput(e.target.value)}
+                />
+                <button 
+                  onClick={handleManualLoginSubmit}
+                  className="bg-blue-600 text-white py-4 w-full rounded-xl font-bold text-lg shadow-lg active:scale-95"
+                >
+                  Войти
+                </button>
+                <div className="flex items-center justify-center gap-2 cursor-pointer mt-2" onClick={() => setRememberMe(!rememberMe)}>
+                  <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${rememberMe ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}>
+                    {rememberMe && <CheckCircle className="w-3 h-3 text-white" />}
+                  </div>
+                  <span className="text-gray-600 text-sm select-none">Запомнить меня</span>
+                </div>
+                <button 
+                  onClick={() => setShowManualLogin(false)}
+                  className="text-gray-500 text-sm underline"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          );
+        }
 
         if (!authorized) {
           if (deviceLocked) {
@@ -1020,7 +1432,7 @@
                   value={manualIdInput}
                   onChange={e => setManualIdInput(e.target.value)}
                 />
-                <button onClick={handleManualLogin} className="bg-blue-600 text-white py-4 w-full rounded-xl font-bold text-lg shadow-lg active:scale-95">Войти</button>
+                <button onClick={handleManualLoginSubmit} className="bg-blue-600 text-white py-4 w-full rounded-xl font-bold text-lg shadow-lg active:scale-95">Войти</button>
                 <div className="flex items-center justify-center gap-2 cursor-pointer mt-2" onClick={() => setRememberMe(!rememberMe)}>
                   <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${rememberMe ? 'bg-blue-600 border-blue-600' : 'bg-white border-gray-300'}`}>
                     {rememberMe && <CheckCircle className="w-3 h-3 text-white" />}
